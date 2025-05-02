@@ -1,7 +1,7 @@
 from mcp.server.fastmcp import FastMCP
 import os
 import uuid
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Union
 import openpyxl
 from openpyxl.utils import get_column_letter
 from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
@@ -244,7 +244,7 @@ def get_sheet_data(sheet_index: int = None, sheet_name: str = None,
         end_col: Last column to retrieve (1-based, optional)
         
     Returns:
-        Dictionary containing sheet data
+        Dictionary containing sheet data with numeric values preserved
     """
     if excel_automation.active_workbook is None:
         return {"error": "No active workbook. Please open or create a workbook first."}
@@ -281,7 +281,8 @@ def get_sheet_data(sheet_index: int = None, sheet_name: str = None,
             row_data = []
             for col in range(start_col, end_col + 1):
                 cell = sheet.cell(row=row, column=col)
-                row_data.append(str(cell.value) if cell.value is not None else "")
+                # Preserve the original value type (number, string, etc.)
+                row_data.append(cell.value if cell.value is not None else "")
             data.append(row_data)
         
         # Get column headers (if available)
@@ -289,7 +290,7 @@ def get_sheet_data(sheet_index: int = None, sheet_name: str = None,
         if start_row > 1:
             for col in range(start_col, end_col + 1):
                 cell = sheet.cell(row=1, column=col)
-                headers.append(str(cell.value) if cell.value is not None else f"Column {get_column_letter(col)}")
+                headers.append(cell.value if cell.value is not None else f"Column {get_column_letter(col)}")
         
         return {
             "success": True,
@@ -307,7 +308,7 @@ def get_sheet_data(sheet_index: int = None, sheet_name: str = None,
 
 @mcp.tool()
 def update_cell(sheet_index: int = None, sheet_name: str = None,
-               row: int = 1, col: int = 1, value: str = "") -> Dict[str, Any]:
+               row: int = 1, col: int = 1, value: Any = "") -> Dict[str, Any]:
     """
     Update the value of a cell.
     
@@ -316,7 +317,7 @@ def update_cell(sheet_index: int = None, sheet_name: str = None,
         sheet_name: Name of the sheet (optional if sheet_index provided)
         row: Row index (1-based)
         col: Column index (1-based)
-        value: New cell value
+        value: New cell value (will be preserved as number if numeric)
         
     Returns:
         Status of the operation
@@ -340,6 +341,23 @@ def update_cell(sheet_index: int = None, sheet_name: str = None,
             # Default to active sheet
             sheet = wb.active
         
+        # Convert value to appropriate type if it's a string representing a number
+        if isinstance(value, str):
+            try:
+                # Try to convert to int first
+                if value.isdigit() or (value.startswith('-') and value[1:].isdigit()):
+                    value = int(value)
+                # Then try float if it has a decimal point
+                elif '.' in value:
+                    try:
+                        value = float(value)
+                    except ValueError:
+                        # Keep as string if conversion fails
+                        pass
+            except (ValueError, TypeError):
+                # Keep as string if conversion fails
+                pass
+        
         # Update cell value
         sheet.cell(row=row, column=col).value = value
         
@@ -353,7 +371,7 @@ def update_cell(sheet_index: int = None, sheet_name: str = None,
 @mcp.tool()
 def update_range(sheet_index: int = None, sheet_name: str = None,
                 start_row: int = 1, start_col: int = 1, 
-                data: List[List[str]] = None) -> Dict[str, Any]:
+                data: List[List[Any]] = None) -> Dict[str, Any]:
     """
     Update a range of cells with data.
     
@@ -362,7 +380,7 @@ def update_range(sheet_index: int = None, sheet_name: str = None,
         sheet_name: Name of the sheet (optional if sheet_index provided)
         start_row: Starting row index (1-based)
         start_col: Starting column index (1-based)
-        data: 2D array of values to insert
+        data: 2D array of values to insert (numeric values will be preserved as numbers)
         
     Returns:
         Status of the operation
@@ -392,6 +410,23 @@ def update_range(sheet_index: int = None, sheet_name: str = None,
         # Update range with data
         for i, row_data in enumerate(data):
             for j, value in enumerate(row_data):
+                # Convert value to appropriate type if it's a string representing a number
+                if isinstance(value, str):
+                    try:
+                        # Try to convert to int first
+                        if value.isdigit() or (value.startswith('-') and value[1:].isdigit()):
+                            value = int(value)
+                        # Then try float if it has a decimal point
+                        elif '.' in value:
+                            try:
+                                value = float(value)
+                            except ValueError:
+                                # Keep as string if conversion fails
+                                pass
+                    except (ValueError, TypeError):
+                        # Keep as string if conversion fails
+                        pass
+                
                 sheet.cell(row=start_row + i, column=start_col + j).value = value
         
         end_row = start_row + len(data) - 1
@@ -1077,7 +1112,7 @@ def create_xlwings_pivot_table(
     style_name: str = "PivotStyleMedium9"
 ) -> Dict[str, Any]:
     """
-    Create a pivot table using xlwings (requires Excel installation).
+    Create a pivot table using pandas and openpyxl.
     
     Args:
         filepath: Path to Excel file (required if no active workbook)
@@ -1103,7 +1138,7 @@ def create_xlwings_pivot_table(
         return {"error": "Failed to import pivot_xlwings module"}
     
     if not is_xlwings_available():
-        return {"error": "xlwings is not installed or Excel is not available. Please install xlwings with 'pip install xlwings'"}
+        return {"error": "pandas or openpyxl is not installed. Please install with 'pip install pandas openpyxl'"}
     
     # If no filepath provided but we have an active workbook, save it to a temp file
     if not filepath and excel_automation.active_workbook:
@@ -1149,13 +1184,16 @@ def create_xlwings_pivot_table(
         if excel_automation.active_workbook and filepath.endswith("temp_workbook.xlsx"):
             excel_automation.active_workbook = openpyxl.load_workbook(filepath)
         
+        if "error" in result:
+            return {"error": result["error"]}
+            
         return {
             "success": True,
             "message": result["message"],
             "pivot_info": result["details"]
         }
     except Exception as e:
-        return {"error": f"Error creating pivot table with xlwings: {str(e)}"}
+        return {"error": f"Error creating pivot table: {str(e)}"}
 
 
 @mcp.tool()
@@ -1164,7 +1202,7 @@ def refresh_xlwings_pivot_table(
     pivot_name: str = None
 ) -> Dict[str, Any]:
     """
-    Refresh an existing pivot table using xlwings.
+    Refresh an existing pivot table using pandas and openpyxl.
     
     Args:
         filepath: Path to Excel file (required if no active workbook)
@@ -1179,7 +1217,7 @@ def refresh_xlwings_pivot_table(
         return {"error": "Failed to import pivot_xlwings module"}
     
     if not is_xlwings_available():
-        return {"error": "xlwings is not installed or Excel is not available. Please install xlwings with 'pip install xlwings'"}
+        return {"error": "pandas or openpyxl is not installed. Please install with 'pip install pandas openpyxl'"}
     
     # If no filepath provided but we have an active workbook, save it to a temp file
     if not filepath and excel_automation.active_workbook:
@@ -1205,12 +1243,15 @@ def refresh_xlwings_pivot_table(
         if excel_automation.active_workbook and filepath.endswith("temp_workbook.xlsx"):
             excel_automation.active_workbook = openpyxl.load_workbook(filepath)
         
+        if "error" in result:
+            return {"error": result["error"]}
+            
         return {
             "success": True,
             "message": result["message"]
         }
     except Exception as e:
-        return {"error": f"Error refreshing pivot table with xlwings: {str(e)}"}
+        return {"error": f"Error refreshing pivot table: {str(e)}"}
 
 
 @mcp.tool()
@@ -1230,7 +1271,7 @@ def modify_xlwings_pivot_table(
     style_name: str = None
 ) -> Dict[str, Any]:
     """
-    Modify an existing pivot table using xlwings.
+    Modify an existing pivot table using pandas and openpyxl.
     
     Args:
         filepath: Path to Excel file (required if no active workbook)
@@ -1256,7 +1297,7 @@ def modify_xlwings_pivot_table(
         return {"error": "Failed to import pivot_xlwings module"}
     
     if not is_xlwings_available():
-        return {"error": "xlwings is not installed or Excel is not available. Please install xlwings with 'pip install xlwings'"}
+        return {"error": "pandas or openpyxl is not installed. Please install with 'pip install pandas openpyxl'"}
     
     # If no filepath provided but we have an active workbook, save it to a temp file
     if not filepath and excel_automation.active_workbook:
@@ -1293,12 +1334,15 @@ def modify_xlwings_pivot_table(
         if excel_automation.active_workbook and filepath.endswith("temp_workbook.xlsx"):
             excel_automation.active_workbook = openpyxl.load_workbook(filepath)
         
+        if "error" in result:
+            return {"error": result["error"]}
+            
         return {
             "success": True,
             "message": result["message"]
         }
     except Exception as e:
-        return {"error": f"Error modifying pivot table with xlwings: {str(e)}"}
+        return {"error": f"Error modifying pivot table: {str(e)}"}
 
 def main():
     mcp.run(transport="stdio")
